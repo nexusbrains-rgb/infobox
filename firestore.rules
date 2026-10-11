@@ -1,0 +1,93 @@
+rules_version = '2';
+
+// 情報ボックス用 Firestore セキュリティルール（共有リンクによるプロジェクト単位の共有）
+// このファイルの中身を、そのまま Firebase コンソールの「Firestore Database」→「ルール」に貼り付けて公開してください。書き換えは不要です。
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function me() { return request.auth.token.email.lower(); }
+
+    // 「自分だけ」の記録と写真：本人だけが読み書きできる
+    match /users/{uid}/{document=**} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /projects/{pid} {
+      function proj() { return get(/databases/$(database)/documents/projects/$(pid)).data; }
+      function myRole() { return proj().members.get(me(), ""); }
+      function changedOnly(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+      function onlyMyEntry(field) {
+        return request.resource.data.get(field, {}).diff(resource.data.get(field, {})).affectedKeys().hasOnly([me()]);
+      }
+      function joinPath() { return /databases/$(database)/documents/projects/$(pid)/joins/$(request.auth.uid); }
+      function invitePath(token) { return /databases/$(database)/documents/projects/$(pid)/invites/$(token); }
+
+      // メンバーだけがプロジェクトを見られる
+      allow read: if signedIn() && me() in resource.data.memberEmails;
+
+      // 作成：作成者が唯一のメンバー（オーナー）として作る場合のみ
+      allow create: if signedIn()
+        && request.resource.data.ownerEmail == me()
+        && request.resource.data.members.keys().hasOnly([me()])
+        && request.resource.data.members[me()] == "owner"
+        && request.resource.data.memberEmails == [me()];
+
+      // オーナーによる変更（名前、メンバーの権限変更・削除）。オーナー自身は外せない
+      allow update: if signedIn()
+        && resource.data.members.get(me(), "") == "owner"
+        && request.resource.data.ownerEmail == resource.data.ownerEmail
+        && request.resource.data.members.get(resource.data.ownerEmail, "") == "owner"
+        && resource.data.ownerEmail in request.resource.data.memberEmails;
+
+      // 共有リンクからの参加：有効なリンクの権限で、自分だけを追加する
+      allow update: if signedIn()
+        && !(me() in resource.data.memberEmails)
+        && changedOnly(["members", "memberEmails", "memberNames"])
+        && onlyMyEntry("members")
+        && onlyMyEntry("memberNames")
+        && exists(joinPath())
+        && exists(invitePath(get(joinPath()).data.token))
+        && request.resource.data.members[me()] == get(invitePath(get(joinPath()).data.token)).data.role
+        && request.resource.data.memberEmails.toSet() == resource.data.memberEmails.toSet().union([me()].toSet());
+
+      // メンバー自身による退出（オーナーは退出できない）
+      allow update: if signedIn()
+        && me() in resource.data.memberEmails
+        && resource.data.members.get(me(), "") != "owner"
+        && changedOnly(["members", "memberEmails", "memberNames"])
+        && onlyMyEntry("members")
+        && !(me() in request.resource.data.members)
+        && request.resource.data.memberEmails.toSet() == resource.data.memberEmails.toSet().difference([me()].toSet());
+
+      allow delete: if signedIn() && resource.data.members.get(me(), "") == "owner";
+
+      // 共有リンク：トークンを知っている人だけが1件ずつ読める（一覧はオーナーのみ）。発行・無効化はオーナーのみ
+      match /invites/{token} {
+        allow get: if signedIn();
+        allow list, write: if signedIn() && myRole() == "owner";
+      }
+
+      // 参加の申告：有効なリンクのトークンを、自分の分だけ書ける
+      match /joins/{uid} {
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.token is string
+          && exists(invitePath(request.resource.data.token));
+        allow read: if signedIn() && (request.auth.uid == uid || myRole() == "owner");
+      }
+
+      // 記録と写真：メンバーは読める、オーナーと「編集できる」人だけ書ける
+      match /notes/{noteId} {
+        allow read: if signedIn() && myRole() != "";
+        allow write: if signedIn() && myRole() in ["owner", "editor"];
+      }
+      match /images/{imageId} {
+        allow read: if signedIn() && myRole() != "";
+        allow write: if signedIn() && myRole() in ["owner", "editor"];
+      }
+    }
+  }
+}
