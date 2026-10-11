@@ -1,0 +1,7 @@
+このフォルダには、写真の文字読み取りに使う以下のオープンソースソフトウェアが含まれます。
+
+- PaddleOCR / PaddleOCR.js（PP-OCRv6_small モデル） Apache License 2.0  https://github.com/PaddlePaddle/PaddleOCR
+- ONNX Runtime Web  MIT License  https://github.com/microsoft/onnxruntime
+- OpenCV.js（@techstark/opencv-js） Apache License 2.0  https://github.com/TechStark/opencv-js
+- clipper-lib  Boost Software License
+- js-yaml  MIT License  https://github.com/nodeca/js-yaml
